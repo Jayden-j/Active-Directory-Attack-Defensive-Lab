@@ -122,12 +122,47 @@ Running the attacks is only part of it. I went back through each technique and c
 
 ---
 
-### Custom Wazuh rule for DCSync
+### Custom Wazuh detection rules
 
-Out of the box, Wazuh won't alert on Event 4662. That's actually reasonable, because 4662 fires all the time during normal AD activity, and alerting on all of it would drown an analyst in noise. The trick is to only fire when the 4662 event carries one of the two replication-rights GUIDs that DCSync actually uses, so I wrote a rule to do exactly that.
+The native event table tells you what to look for, but nobody's sitting in Event Viewer all day. To turn these signatures into actual alerts I wrote three custom rules in `/var/ossec/etc/rules/local_rules.xml`, one per attack, each mapped to its MITRE technique. All three fire off the Windows Security events the agent is already forwarding.
+
+**Kerberoasting.** A 4769 on its own is normal, since every service ticket request generates one. The giveaway is the encryption type. Modern Kerberos hands out AES tickets, so an RC4 request (`0x17`) for a service account is worth flagging.
 
 ```xml
-<group name="windows,dcsync,attack,">
+<group name="active_directory,kerberoasting,">
+  <rule id="100200" level="12">
+    <if_group>windows_security</if_group>
+    <field name="win.system.eventID">^4769$</field>
+    <field name="win.eventdata.ticketEncryptionType">^0x17$</field>
+    <description>Possible Kerberoasting: RC4-encrypted service ticket requested (MITRE T1558.003)</description>
+    <mitre>
+      <id>T1558.003</id>
+    </mitre>
+  </rule>
+</group>
+```
+
+**Pass-the-Hash.** NTLM network logons (4624, Logon Type 3) happen legitimately, so this one is tuned lower and worded as "review," not "confirmed." In a real environment I'd scope it to admin accounts or specific source subnets, because plain NTLM Type 3 logons happen all the time and you'd bury yourself in false positives otherwise.
+
+```xml
+<group name="active_directory,pass_the_hash,">
+  <rule id="100220" level="10">
+    <if_group>windows_security</if_group>
+    <field name="win.system.eventID">^4624$</field>
+    <field name="win.eventdata.logonType">^3$</field>
+    <field name="win.eventdata.authenticationPackageName">NTLM</field>
+    <description>NTLM network logon - review for Pass-the-Hash (MITRE T1550.002)</description>
+    <mitre>
+      <id>T1550.002</id>
+    </mitre>
+  </rule>
+</group>
+```
+
+**DCSync.** This is the one Wazuh misses by default, and the one I'm happiest with. Event 4662 fires constantly during normal AD activity, so alerting on all of it would bury an analyst. The fix is to only fire when the 4662 carries one of the two replication-rights GUIDs that DCSync abuses. That combination almost never shows up outside a real replication, and when it comes from something that isn't a domain controller, it's a strong signal.
+
+```xml
+<group name="active_directory,dcsync,">
   <rule id="100010" level="12">
     <if_group>windows_security</if_group>
     <field name="win.system.eventID">^4662$</field>
@@ -136,12 +171,18 @@ Out of the box, Wazuh won't alert on Event 4662. That's actually reasonable, bec
     <mitre>
       <id>T1003.006</id>
     </mitre>
-    <group>dcsync,active_directory,mitre_credential_access,</group>
+    <group>dcsync,mitre_credential_access,</group>
   </rule>
 </group>
 ```
 
-When I ran the DCSync attack, the rule fired a burst of level-12 alerts, all inside a roughly 3-second window, which lines up with how fast `secretsdump` hammers out its replication requests. It named `svc-sql` as the account responsible and tagged the alert with MITRE T1003.006.
+After adding the rules, restart the manager to load them:
+
+```bash
+sudo systemctl restart wazuh-manager
+```
+
+When I ran the DCSync attack, the rule fired a burst of level-12 alerts all inside a roughly 3-second window, which lines up with how fast `secretsdump` hammers out its replication requests. It named `svc-sql` as the account responsible and tagged the alert with MITRE T1003.006.
 
 <!-- SCREENSHOT: Wazuh alerts for rule.id 100010 — burst histogram + alert detail -->
 
