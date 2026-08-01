@@ -1,0 +1,46 @@
+<!--
+  Custom detection rules for the Active Directory Attack & Defense Lab
+  File location on the Wazuh manager: /var/ossec/etc/rules/local_rules.xml
+  Restart the manager after editing:  sudo systemctl restart wazuh-manager
+-->
+
+<!-- Kerberoasting: RC4-encrypted service ticket request (MITRE T1558.003) -->
+<group name="active_directory,kerberoasting,">
+  <rule id="100200" level="12">
+    <if_group>windows_security</if_group>
+    <field name="win.system.eventID">^4769$</field>
+    <field name="win.eventdata.ticketEncryptionType">^0x17$</field>
+    <description>Possible Kerberoasting: RC4-encrypted service ticket requested (MITRE T1558.003)</description>
+    <mitre>
+      <id>T1558.003</id>
+    </mitre>
+  </rule>
+</group>
+
+<!-- Pass-the-Hash: NTLM network logon, review candidate (MITRE T1550.002) -->
+<group name="active_directory,pass_the_hash,">
+  <rule id="100220" level="10">
+    <if_group>windows_security</if_group>
+    <field name="win.system.eventID">^4624$</field>
+    <field name="win.eventdata.logonType">^3$</field>
+    <field name="win.eventdata.authenticationPackageName">NTLM</field>
+    <description>NTLM network logon - review for Pass-the-Hash (MITRE T1550.002)</description>
+    <mitre>
+      <id>T1550.002</id>
+    </mitre>
+  </rule>
+</group>
+
+<!-- DCSync: directory replication rights invoked (MITRE T1003.006) -->
+<group name="active_directory,dcsync,">
+  <rule id="100010" level="12">
+    <if_group>windows_security</if_group>
+    <field name="win.system.eventID">^4662$</field>
+    <field name="win.eventdata.properties">1131f6aa-9c07-11d1-f79f-00c04fc2dcd2|1131f6ad-9c07-11d1-f79f-00c04fc2dcd2</field>
+    <description>Possible DCSync attack: AD replication rights used by $(win.eventdata.subjectUserName)</description>
+    <mitre>
+      <id>T1003.006</id>
+    </mitre>
+    <group>dcsync,mitre_credential_access,</group>
+  </rule>
+</group>
