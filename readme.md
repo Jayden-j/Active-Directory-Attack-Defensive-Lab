@@ -27,7 +27,7 @@ The part I'm most happy with is the detection at the end. Wazuh's default rules 
 
 Every VM has two network adapters. One is host-only on `192.168.1.0/24` for the isolated lab network, and the other is NAT for internet access when I need to install tooling. That way the attack traffic stays contained but I can still pull packages down.
 
-<!-- picture1 -->
+![Lab Architecture](Screenshots/picture1.png)
 
 ---
 
@@ -51,16 +51,17 @@ Starting from the phished `j.rivera` account, I pulled the full domain graph wit
 bloodhound-python -u j.rivera -p 'Summer2025!' -d labbox.local -ns 192.168.1.10 -c All --zip
 ```
 
-<!-- picture2 -->
+![BloodHound Collection](Screenshots/picture2.png)
+
 This came back with 2 computers, 7 users, 52 groups, and 3 OUs.
 
 I ran BloodHound's "shortest path" query from `j.rivera` to Domain Admins, and it came back empty. That's actually correct, not a failure. BloodHound maps ACL and permission relationships, things like group membership or GenericAll rights, and `j.rivera` doesn't have any of those. The entire reason `j.rivera` matters here is just that it's *any* authenticated domain user, which is all Kerberoasting requires. The real escalation happens by cracking a password offline, and that's not something BloodHound can represent as a graph edge.
 
-<!-- picture3 -->
+![BloodHound Query - No Path](Screenshots/picture3.png)
 
 Once `svc-sql` is compromised, the picture changes completely. After re-collecting with a fresh scan, BloodHound shows a real path from `svc-sql` straight to Domain Admins, through a GenericWrite right on DC01's computer object and a CoerceToTGT relationship into the domain:
 
-<!-- picture4 -->
+![BloodHound - svc-sql to Domain Admins](Screenshots/picture4.png)
 
 ---
 
@@ -73,7 +74,8 @@ impacket-GetUserSPNs labbox.local/j.rivera:'Summer2025!' \
   -dc-ip 192.168.1.10 -request -outputfile kerberoast.hash
 ```
 
-<!-- picture5pt1 and picture5pt2 -->
+![Kerberoasting - SPN Request](Screenshots/picture5pt1.png)
+![Kerberoasting - Hash Output](Screenshots/picture5pt2.png)
 
 The hash fell in under a second against `rockyou.txt`, since the service account was set up with a weak password (`Welcome1`).
 
@@ -81,7 +83,7 @@ The hash fell in under a second against `rockyou.txt`, since the service account
 john --wordlist=/usr/share/wordlists/rockyou.txt kerberoast.hash
 ```
 
-<!-- picture6 -->
+![Hash Cracking - Password Found](Screenshots/picture6.png)
 
 ---
 
@@ -95,7 +97,7 @@ impacket-psexec -hashes :<NT_HASH> LABBOX/svc-sql@192.168.1.20
 
 That gave me a SYSTEM shell on WS01. Worth noting: Windows Defender and Tamper Protection blocked the payload on the first few tries, which was a good reminder that built-in AV does catch this, and I had to work around it to get the shell.
 
-<!-- picture7 -->
+![Pass-the-Hash - SYSTEM Shell](Screenshots/picture7.png)
 
 ---
 
@@ -109,7 +111,8 @@ impacket-secretsdump -hashes :<NT_HASH> LABBOX/svc-sql@192.168.1.10
 
 At this point the whole domain is compromised. Every user, service, and machine account hash is dumped.
 
-<!-- picture8pt1 and picture8pt2 -->
+![DCSync - Hash Dump](Screenshots/picture8pt1.png)
+![DCSync - Credentials](Screenshots/picture8pt2.png)
 
 ---
 
@@ -125,7 +128,7 @@ Running the attacks is only part of it. I went back through each technique and c
 | Pass-the-Hash | **4624** | Logon Type 3 with NTLM as the auth package |
 | DCSync | **4662** | Object access using a replication-rights GUID `{1131f6aa-...}` |
 
-<!-- picture9 -->
+![Windows Event Signatures](Screenshots/picture9.png)
 
 ---
 
@@ -191,9 +194,9 @@ sudo systemctl restart wazuh-manager
 
 When I ran the DCSync attack, the rule fired a burst of level-12 alerts all inside a roughly 3-second window, which lines up with how fast `secretsdump` hammers out its replication requests. It named `svc-sql` as the account responsible and tagged the alert with MITRE T1003.006.
 
-<!-- picture10pt1 and picture10pt2 and picture10pt3 -->
-
-<!-- I'll put the last wazuh dashboard picture here -->
+![Wazuh DCSync Alert - Part 1](Screenshots/picture10pt1.png)
+![Wazuh DCSync Alert - Part 2](Screenshots/picture10pt2.png)
+![Wazuh DCSync Alert - Part 3](Screenshots/picture10pt3.png)
 
 ---
 
