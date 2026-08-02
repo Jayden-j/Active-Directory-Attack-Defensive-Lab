@@ -138,6 +138,9 @@ The table tells you what to look for, but nobody's watching Event Viewer all day
 
 **Kerberoasting.** A 4769 on its own is normal — every service ticket request generates one. The giveaway is the encryption type: modern Kerberos hands out AES tickets, so an RC4 request (`0x17`) for a service account is worth flagging.
 
+<details>
+<summary>Rule 100200 — Kerberoasting (T1558.003)</summary>
+
 ```xml
 <group name="active_directory,kerberoasting,">
   <rule id="100200" level="12">
@@ -152,7 +155,12 @@ The table tells you what to look for, but nobody's watching Event Viewer all day
 </group>
 ```
 
+</details>
+
 **Pass-the-Hash.** NTLM network logons (4624, Type 3) happen legitimately, so this one is tuned lower and worded as "review," not "confirmed." In production I'd scope it to admin accounts or specific subnets — plain NTLM Type 3 logons are everywhere and you'd drown in false positives otherwise.
+
+<details>
+<summary>Rule 100220 — Pass-the-Hash (T1550.002)</summary>
 
 ```xml
 <group name="active_directory,pass_the_hash,">
@@ -169,7 +177,12 @@ The table tells you what to look for, but nobody's watching Event Viewer all day
 </group>
 ```
 
+</details>
+
 **DCSync.** This is the one Wazuh misses by default, and the one I'm happiest with. Event 4662 fires constantly during normal AD activity, so alerting on all of it would bury an analyst. The fix: only fire when the 4662 carries one of the two replication-rights GUIDs DCSync abuses. That combination almost never appears outside real replication — and when it comes from something that isn't a domain controller, it's a strong signal.
+
+<details>
+<summary>Rule 100010 — DCSync (T1003.006)</summary>
 
 ```xml
 <group name="active_directory,dcsync,">
@@ -185,6 +198,8 @@ The table tells you what to look for, but nobody's watching Event Viewer all day
   </rule>
 </group>
 ```
+
+</details>
 
 After adding the rules, restart the manager to load them:
 
