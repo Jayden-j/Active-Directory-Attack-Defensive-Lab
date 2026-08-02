@@ -8,16 +8,13 @@ A four-VM Active Directory lab I built to run a full attack chain end to end, fr
 
 ---
 
-![Lab Architecture](Screenshots/picture1.png)
 ## Overview
 
-I wanted a lab where I could actually carry out a domain compromise the way an attacker would, and then figure out how a SOC analyst would catch it. So I built the whole thing from scratch in VMware, ran every attack by hand from Kali, and then went back and confirmed each technique showed up somewhere I could detect it, both in raw Windows logs and in a SIEM.
+I wanted a lab where I could run a real domain compromise the way an attacker would, then work out how a SOC analyst would catch it. I built it from scratch in VMware, ran every attack by hand from Kali, and confirmed each technique showed up where I could detect it — in raw Windows logs and in a SIEM.
 
-The part I'm most happy with is the detection at the end. Wazuh's default rules don't flag DCSync, so I wrote my own rule to catch it.
+The part I'm most happy with is the detection. Wazuh doesn't flag DCSync out of the box, so I wrote my own rule to catch it.
 
 ---
-
-
 
 ## Lab Architecture
 
@@ -28,10 +25,9 @@ The part I'm most happy with is the detection at the end. Wazuh's default rules 
 | **Kali** | Attacker | Kali Linux | `192.168.1.250` |
 | **Wazuh** | SIEM / log analysis | Ubuntu Server | `192.168.1.15` |
 
-After installing the required software I disabled the NAT adapter across the VMS, and set every VM to use a host-only on `192.168.1.0/24` for the isolated lab network. That way the attack traffic stays contained.
+Once everything was installed I disabled NAT on every VM and put them all on a host-only `192.168.1.0/24` network, so the attack traffic stays fully contained.
 
-
-
+![Lab Architecture](Screenshots/picture1.png)
 
 ---
 
@@ -55,89 +51,59 @@ Starting from the phished `j.rivera` account, I pulled the full domain graph wit
 bloodhound-python -u j.rivera -p 'Summer2025!' -d labbox.local -ns 192.168.1.10 -c All --zip
 ```
 
-<details>
-<summary>View BloodHound Collection results</summary>
-
 ![BloodHound Collection](Screenshots/picture2.png)
-
-</details>
 
 This came back with 2 computers, 7 users, 52 groups, and 3 OUs.
 
-I ran BloodHound's "shortest path" query from `j.rivera` to Domain Admins, and it came back empty. That's actually correct, not a failure. BloodHound maps ACL and permission relationships, things like group membership or GenericAll rights, and `j.rivera` doesn't have any of those. The entire reason `j.rivera` matters here is just that it's *any* authenticated domain user, which is all Kerberoasting requires. The real escalation happens by cracking a password offline, and that's not something BloodHound can represent as a graph edge.
-
-<details>
-<summary>View BloodHound Query results</summary>
+BloodHound's shortest-path query from `j.rivera` to Domain Admins came back empty — and that's correct, not a failure. BloodHound maps ACL and permission edges (group membership, GenericAll, and so on), and `j.rivera` has none of those. It matters here only because it's *an authenticated domain user*, which is all Kerberoasting needs. The real escalation is an offline password crack, and that's not something BloodHound can draw as an edge.
 
 ![BloodHound Query - No Path](Screenshots/picture3.png)
 
-</details>
-
-Once `svc-sql` is compromised, the picture changes completely. After re-collecting with a fresh scan, BloodHound shows a real path from `svc-sql` straight to Domain Admins, through a GenericWrite right on DC01's computer object and a CoerceToTGT relationship into the domain:
-
-<details>
-<summary>View BloodHound path after svc-sql compromise</summary>
+Once `svc-sql` is compromised, the picture changes. A fresh collection shows a real path from `svc-sql` straight to Domain Admins — a GenericWrite on DC01's computer object plus a CoerceToTGT edge into the domain:
 
 ![BloodHound - svc-sql to Domain Admins](Screenshots/picture4.png)
-
-</details>
 
 ---
 
 ### 2 · Kerberoasting (T1558.003)
 
-Any authenticated domain user can request a service ticket for an account that has an SPN, and that ticket is encrypted with the service account's password hash. That means I can grab it and crack it offline. I went after `svc-sql`.
+Any authenticated user can request a service ticket for an account with an SPN, and that ticket is encrypted with the service account's password hash — so I can grab it and crack it offline. I went after `svc-sql`.
 
 ```bash
 impacket-GetUserSPNs labbox.local/j.rivera:'Summer2025!' \
   -dc-ip 192.168.1.10 -request -outputfile kerberoast.hash
 ```
 
-<details>
-<summary>View Kerberoasting attack output</summary>
-
 ![Kerberoasting - SPN Request](Screenshots/picture5pt1.png)
 ![Kerberoasting - Hash Output](Screenshots/picture5pt2.png)
 
-</details>
-
-The hash fell in under a second against `rockyou.txt`, since the service account was set up with a weak password (`Welcome1`).
+The hash fell in under a second against `rockyou.txt`, since the service account had a weak password (`Welcome1`).
 
 ```bash
 john --wordlist=/usr/share/wordlists/rockyou.txt kerberoast.hash
 ```
 
-<details>
-<summary>View hash cracking results</summary>
-
 ![Hash Cracking - Password Found](Screenshots/picture6.png)
-
-</details>
 
 ---
 
 ### 3 · Pass-the-Hash (T1550.002)
 
-Now that `svc-sql` was cracked, and since it had local admin on WS01 (which happens a lot in real environments), I used the NT hash to log straight into WS01. I never typed the password once.
+`svc-sql` had local admin on WS01 — common in real environments — so I used its NT hash to log straight in. Never typed the password once.
 
 ```bash
 impacket-psexec -hashes :<NT_HASH> LABBOX/svc-sql@192.168.1.20
 ```
 
-That gave me a SYSTEM shell on WS01. Worth noting: Windows Defender and Tamper Protection blocked the payload on the first few tries, which was a good reminder that built-in AV does catch this, and I had to work around it to get the shell.
-
-<details>
-<summary>View Pass-the-Hash shell access</summary>
+That gave me a SYSTEM shell on WS01. Worth noting: Defender and Tamper Protection blocked the payload on the first few tries — a good reminder that built-in AV does catch this — so I had to work around it to get the shell.
 
 ![Pass-the-Hash - SYSTEM Shell](Screenshots/picture7.png)
-
-</details>
 
 ---
 
 ### 4 · DCSync (T1003.006)
 
-`svc-sql` had been given Replicating Directory Changes rights, which is what an over-delegated service account looks like in the wild. With that, I could pretend to be a domain controller and replicate every credential hash out of the domain, including the `krbtgt` hash that would let you forge Golden Tickets.
+`svc-sql` had been granted Replicating Directory Changes rights — what an over-delegated service account looks like in the wild. With that I could impersonate a domain controller and replicate every credential hash out of the domain, including the `krbtgt` hash that forges Golden Tickets.
 
 ```bash
 impacket-secretsdump -hashes :<NT_HASH> LABBOX/svc-sql@192.168.1.10
@@ -145,19 +111,14 @@ impacket-secretsdump -hashes :<NT_HASH> LABBOX/svc-sql@192.168.1.10
 
 At this point the whole domain is compromised. Every user, service, and machine account hash is dumped.
 
-<details>
-<summary>View DCSync credential dump</summary>
-
 ![DCSync - Hash Dump](Screenshots/picture8pt1.png)
 ![DCSync - Credentials](Screenshots/picture8pt2.png)
-
-</details>
 
 ---
 
 ## Detection & Defense
 
-Running the attacks is only part of it. I went back through each technique and confirmed it showed up in Windows telemetry and in Wazuh.
+Running the attacks is only half of it. I went back through each technique and confirmed it showed up in Windows telemetry and in Wazuh.
 
 ### Native Windows event signatures
 
@@ -167,20 +128,15 @@ Running the attacks is only part of it. I went back through each technique and c
 | Pass-the-Hash | **4624** | Logon Type 3 with NTLM as the auth package |
 | DCSync | **4662** | Object access using a replication-rights GUID `{1131f6aa-...}` |
 
-<details>
-<summary>View Windows event signatures</summary>
-
 ![Windows Event Signatures](Screenshots/picture9.png)
-
-</details>
 
 ---
 
 ### Custom Wazuh detection rules
 
-The native event table tells you what to look for, but nobody's sitting in Event Viewer all day. To turn these signatures into actual alerts I wrote three custom rules in `/var/ossec/etc/rules/local_rules.xml`, one per attack, each mapped to its MITRE technique. All three fire off the Windows Security events the agent is already forwarding.
+The table tells you what to look for, but nobody's watching Event Viewer all day. To turn these into alerts I wrote three custom rules in `/var/ossec/etc/rules/local_rules.xml`, one per attack, each mapped to its MITRE technique and firing off the Windows Security events the agent already forwards.
 
-**Kerberoasting.** A 4769 on its own is normal, since every service ticket request generates one. The giveaway is the encryption type. Modern Kerberos hands out AES tickets, so an RC4 request (`0x17`) for a service account is worth flagging.
+**Kerberoasting.** A 4769 on its own is normal — every service ticket request generates one. The giveaway is the encryption type: modern Kerberos hands out AES tickets, so an RC4 request (`0x17`) for a service account is worth flagging.
 
 ```xml
 <group name="active_directory,kerberoasting,">
@@ -196,7 +152,7 @@ The native event table tells you what to look for, but nobody's sitting in Event
 </group>
 ```
 
-**Pass-the-Hash.** NTLM network logons (4624, Logon Type 3) happen legitimately, so this one is tuned lower and worded as "review," not "confirmed." In a real environment I'd scope it to admin accounts or specific source subnets, because plain NTLM Type 3 logons happen all the time and you'd bury yourself in false positives otherwise.
+**Pass-the-Hash.** NTLM network logons (4624, Type 3) happen legitimately, so this one is tuned lower and worded as "review," not "confirmed." In production I'd scope it to admin accounts or specific subnets — plain NTLM Type 3 logons are everywhere and you'd drown in false positives otherwise.
 
 ```xml
 <group name="active_directory,pass_the_hash,">
@@ -213,7 +169,7 @@ The native event table tells you what to look for, but nobody's sitting in Event
 </group>
 ```
 
-**DCSync.** This is the one Wazuh misses by default, and the one I'm happiest with. Event 4662 fires constantly during normal AD activity, so alerting on all of it would bury an analyst. The fix is to only fire when the 4662 carries one of the two replication-rights GUIDs that DCSync abuses. That combination almost never shows up outside a real replication, and when it comes from something that isn't a domain controller, it's a strong signal.
+**DCSync.** This is the one Wazuh misses by default, and the one I'm happiest with. Event 4662 fires constantly during normal AD activity, so alerting on all of it would bury an analyst. The fix: only fire when the 4662 carries one of the two replication-rights GUIDs DCSync abuses. That combination almost never appears outside real replication — and when it comes from something that isn't a domain controller, it's a strong signal.
 
 ```xml
 <group name="active_directory,dcsync,">
@@ -236,16 +192,11 @@ After adding the rules, restart the manager to load them:
 sudo systemctl restart wazuh-manager
 ```
 
-When I ran the DCSync attack, the rule fired a burst of level-12 alerts all inside a roughly 3-second window, which lines up with how fast `secretsdump` hammers out its replication requests. It named `svc-sql` as the account responsible and tagged the alert with MITRE T1003.006.
-
-<details>
-<summary>View Wazuh DCSync alerts</summary>
+When I ran the DCSync attack, the rule fired a burst of level-12 alerts inside a ~3-second window — matching how fast `secretsdump` hammers out its replication requests. It named `svc-sql` as the responsible account and tagged the alert with MITRE T1003.006.
 
 ![Wazuh DCSync Alert - Part 1](Screenshots/picture10pt1.png)
 ![Wazuh DCSync Alert - Part 2](Screenshots/picture10pt2.png)
 ![Wazuh DCSync Alert - Part 3](Screenshots/picture10pt3.png)
-
-</details>
 
 ---
 
@@ -269,7 +220,7 @@ When I ran the DCSync attack, the rule fired a burst of level-12 alerts all insi
 
 ## What I ran into
 
-Getting this working meant fixing a bunch of real problems along the way, not just typing commands. Kerberos kept throwing clock skew errors until I lined up the attacker and DC times, WS01's domain trust broke and had to be repaired, Defender's Tamper Protection kept quietly turning itself back on, and at one point my DCSync events weren't reaching Wazuh at all because the manager had crashed mid-attack from a full disk. The best thing to come out of it was realizing Wazuh doesn't catch DCSync by default, and then writing the rule to fix that myself.
+Getting this working meant fixing real problems, not just typing commands. Kerberos threw clock-skew errors until I synced the attacker and DC clocks; WS01's domain trust broke and needed repairing; Defender's Tamper Protection kept quietly turning itself back on; and at one point DCSync events weren't reaching Wazuh at all because the manager had crashed mid-attack from a full disk. The best thing to come out of it was realizing Wazuh doesn't catch DCSync by default — and writing the rule to fix that myself.
 
 ---
 
