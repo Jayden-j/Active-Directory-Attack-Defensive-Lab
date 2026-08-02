@@ -59,7 +59,7 @@ BloodHound's shortest-path query from `j.rivera` to Domain Admins came back empt
 
 ![BloodHound Query - No Path](Screenshots/picture3.png)
 
-Once `svc-sql` is compromised, the picture changes. A fresh collection shows a real path from `svc-sql` straight to Domain Admins — a GenericWrite on DC01's computer object plus a CoerceToTGT edge into the domain:
+Later on once `svc-sql` is compromised, the picture changes. A fresh collection shows a real path from `svc-sql` straight to Domain Admins — a GenericWrite on DC01's computer object plus a CoerceToTGT edge into the domain:
 
 ![BloodHound - svc-sql to Domain Admins](Screenshots/picture4.png)
 
