@@ -8,6 +8,7 @@ A four-VM Active Directory lab I built to run a full attack chain end to end, fr
 
 ---
 
+![Lab Architecture](Screenshots/picture1.png)
 ## Overview
 
 I wanted a lab where I could actually carry out a domain compromise the way an attacker would, and then figure out how a SOC analyst would catch it. So I built the whole thing from scratch in VMware, ran every attack by hand from Kali, and then went back and confirmed each technique showed up somewhere I could detect it, both in raw Windows logs and in a SIEM.
@@ -15,6 +16,8 @@ I wanted a lab where I could actually carry out a domain compromise the way an a
 The part I'm most happy with is the detection at the end. Wazuh's default rules don't flag DCSync, so I wrote my own rule to catch it.
 
 ---
+
+
 
 ## Lab Architecture
 
@@ -25,14 +28,10 @@ The part I'm most happy with is the detection at the end. Wazuh's default rules 
 | **Kali** | Attacker | Kali Linux | `192.168.1.250` |
 | **Wazuh** | SIEM / log analysis | Ubuntu Server | `192.168.1.15` |
 
-Every VM has two network adapters. One is host-only on `192.168.1.0/24` for the isolated lab network, and the other is NAT for internet access when I need to install tooling. That way the attack traffic stays contained but I can still pull packages down.
+After installing the required software I disabled the NAT adapter across the VMS, and set every VM to use a host-only on `192.168.1.0/24` for the isolated lab network. That way the attack traffic stays contained.
 
-<details>
-<summary>View Lab Architecture diagram</summary>
 
-![Lab Architecture](Screenshots/picture1.png)
 
-</details>
 
 ---
 
