@@ -222,5 +222,3 @@ When I ran DCSync, the rule fired a burst of level-12 alerts inside a ~3-second 
 This took a lot of troubleshooting, not just typing commands. Kerberos threw clock-skew errors until I synced the attacker and DC clocks. WS01's domain trust broke and needed repairing. Defender's Tamper Protection kept quietly turning itself back on. And at one point my DCSync events weren't reaching Wazuh at all, because the manager had crashed mid-attack from a full disk. The best part was figuring out Wazuh doesn't catch DCSync by default, then writing the rule that does.
 
 ---
-
-Built by [Jayden Johnson](https://github.com/Jayden-j) · Information Systems (Cybersecurity), Mercer County Community College
